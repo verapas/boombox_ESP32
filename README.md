@@ -1,6 +1,6 @@
 # Garakuta Boombox (ガラクタ)
 
-**ガラクタ** (Garakuta) is Japanese for **"junk"** or **"scrap"** — a fitting name for a self-built speaker made from salvaged and budget parts that sounds anything but junky.
+**ガラクタ** (Garakuta) is Japanese for **"junk"** or **"scrap"**, a fitting name for a self-built speaker made from salvaged and budget parts that sounds anything but junky.
 
 A fully handmade Bluetooth speaker based on the ESP32. The CAD model, electronics, and firmware were all designed and built from scratch.
 
