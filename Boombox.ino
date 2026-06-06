@@ -33,11 +33,11 @@
   #include <freertos/ringbuf.h>
   #include <freertos/task.h>
 #else
-  #error "Dieses Sketch ist für ESP32 gedacht."
+  #error "This sketch is for ESP32 only."
 #endif
 
 // -----------------------------
-// Pins (aktuelles Mapping)
+// Pins (current mapping)
 // -----------------------------
 namespace Pins {
   // MAX98357A I2S
@@ -45,25 +45,25 @@ namespace Pins {
   constexpr uint8_t I2S_LRC  = 26; // LRC / WS
   constexpr uint8_t I2S_BCLK = 27; // BCLK
 
-  // MAX98357A SD / SD_MODE (beide Verstärker SD zusammen)
-  // Hardware-Fix (wichtig): 10k Pulldown SD -> GND, damit der Amp beim Einschalten sicher stumm ist.
+  // MAX98357A SD / SD_MODE (both amplifier SD pins tied together)
+  // Hardware fix (important): 10k pulldown SD -> GND to ensure the amp starts muted.
   constexpr uint8_t AMP_SD = 17;
 
-  // Action Button gegen GND (interner Pullup)
+  // Action button to GND (internal pull-up)
   constexpr uint8_t ACTION_BUTTON = 16;
 
   // Potentiometer (Wiper / Pin 2)
-  // Pin 1 = GND (gemeinsam), Pin 3 = 3.3V (gemeinsam)
+  // Pin 1 = GND (common), Pin 3 = 3.3V (common)
   constexpr uint8_t POT_BASS   = 33;
   constexpr uint8_t POT_TREBLE = 34;
   constexpr uint8_t POT_VOLUME = 35;
 
-  // WS2812B LED Data In (mit 470Ω in Serie)
+  // WS2812B LED Data In (with 470 ohm series resistor)
   constexpr uint8_t LED_DATA = 23;
 }
 
-// MAX98357A: meistens SD=LOW => Shutdown/Mute, SD=HIGH => aktiv.
-// Falls bei dir invertiert: tausche die beiden Level.
+// MAX98357A: usually SD=LOW => Shutdown/Mute, SD=HIGH => active.
+// Swap levels if the board behaves inversely.
 constexpr uint8_t kAmpMuteLevel = LOW;
 constexpr uint8_t kAmpUnmuteLevel = HIGH;
 
@@ -93,9 +93,9 @@ enum class DisplayMode : uint8_t {
 
 static DisplayMode g_display_mode = DisplayMode::VisualizerA;
 
-// Auto-Poti-Anzeige: Modus vor dem Auto-Wechsel und Timer
+// Auto knob display: mode before auto-switch and timer
 static DisplayMode g_poti_return_mode = DisplayMode::VisualizerA;
-static uint32_t    g_poti_auto_until  = 0; // millis()-Zeitpunkt für Revert (0 = inaktiv)
+static uint32_t    g_poti_auto_until  = 0; // millis() timestamp for auto-revert (0 = inactive)
 
 // Intro text scroller
 static bool g_scroll_active = true;
@@ -111,14 +111,14 @@ static uint8_t g_map_preset = 0;
 static volatile bool g_btn_short_event = false;
 static volatile bool g_btn_long_event = false;
 
-// Potis (0..1), geglättet
+// Knobs (0..1), smoothed
 static volatile float g_vol01 = 0.65f;
 static volatile float g_bass01 = 0.50f;
 static volatile float g_treble01 = 0.50f;
 
-// Audio level (für LEDs)
+// Audio level (for LEDs)
 static volatile float g_audio_peak01 = 0.0f;
-// 8 Frequenzbänder für den Balken-Visualizer (von i2sWriterTask befüllt)
+// 8 frequency bands for the bar visualizer (filled by i2sWriterTask)
 static volatile float g_bands[8] = {};
 static volatile bool g_using_audio_buf_cb = true;
 
@@ -131,7 +131,7 @@ constexpr float kMaxVolume01 = kMaxVolumePercent / 100.0f;
 // -----------------------------
 static i2s_chan_handle_t g_i2s_tx = nullptr;
 
-// PCM buffering between BT stack task and I2S writer task (prevents dropouts/knacks).
+// PCM buffering between BT stack task and I2S writer task (prevents dropouts and crackles).
 static RingbufHandle_t g_pcm_rb = nullptr;
 static TaskHandle_t g_i2s_task = nullptr;
 static volatile uint32_t g_rb_drops = 0;
@@ -159,8 +159,8 @@ static inline bool isLikelyReadablePtr(const void* p) {
 // -----------------------------
 // LEDs
 // -----------------------------
-constexpr uint16_t kNumLeds = 128;        // 2x8x8 Panels in Reihe
-constexpr uint8_t  kLedBrightness = 15;   // Safety: niedrig starten
+constexpr uint16_t kNumLeds = 128;        // 2x8x8 panels chained
+constexpr uint8_t  kLedBrightness = 15;   // Safety: start low
 CRGB g_leds[kNumLeds];
 static uint32_t g_last_led_ms = 0;
 
@@ -170,7 +170,7 @@ static uint32_t g_last_led_ms = 0;
 constexpr uint8_t kMatrixW = 16;
 constexpr uint8_t kMatrixH = 8;
 static bool g_serpentine = true;          // common for 8x8 WS2812 panels
-static bool g_rotate180_panels = true;    // fixed: always rotate 180° (per your physical panel orientation)
+static bool g_rotate180_panels = true;    // fixed: always rotate 180 degrees
 static bool g_swap_panels = false;        // if the first panel in the chain is physically on the right
 
 static void applyMapPreset(uint8_t preset) {
@@ -328,7 +328,7 @@ static void displayNextMode() {
   const uint8_t cur = (uint8_t)g_display_mode;
   const uint8_t next = (uint8_t)((cur + 1) % 4);
   g_display_mode = (DisplayMode)next;
-  g_poti_auto_until = 0; // manuell gewechselt → kein Auto-Revert
+  g_poti_auto_until = 0; // manually switched -> no auto-revert
   Serial.printf("Display mode: %u\n", (unsigned)next);
 }
 
@@ -498,14 +498,14 @@ static void i2sWriterTask(void* /*arg*/) {
     const float vol = g_vol01;
     float peak = 0.0f;
 
-    // IIR-Hüllkurvenfilter für 8 Frequenzbänder.
-    // kLC[i] = exp(-2π*fc/44100) für fc = 80,160,320,640,1280,2560,5120 Hz.
-    // Anwendung auf rectifiziertes Signal → Bandenergie-Hüllkurve.
+    // IIR envelope filter for 8 frequency bands.
+    // kLC[i] = exp(-2*pi*fc/44100) for fc = 80,160,320,640,1280,2560,5120 Hz.
+    // Applied to rectified signal -> band energy envelope.
     static float envLP[7] = {};
     static constexpr float kLC[7] = {
       0.9887f, 0.9775f, 0.9556f, 0.9140f, 0.8385f, 0.7121f, 0.5157f
     };
-    // Verstärkung pro Band (höhere Bänder haben weniger Energie → mehr Gain)
+    // Per-band gain (higher bands carry less energy -> more gain)
     static constexpr float kBG[8] = {
       3.0f, 6.0f, 9.0f, 13.0f, 18.0f, 24.0f, 30.0f, 36.0f
     };
@@ -530,7 +530,7 @@ static void i2sWriterTask(void* /*arg*/) {
       if (al > peak) peak = al;
       if (ar > peak) peak = ar;
 
-      // Bandanalyse: rectifiziertes Mono-Signal durch LP-Filterkaskade
+      // Band analysis: rectified mono signal through LP filter cascade
       const float monoAbs = (al + ar) * 0.5f;
       for (int bi = 0; bi < 7; bi++) {
         envLP[bi] = envLP[bi] * kLC[bi] + monoAbs * (1.0f - kLC[bi]);
@@ -546,7 +546,7 @@ static void i2sWriterTask(void* /*arg*/) {
       out[i + 1] = ((int32_t)clip16(r)) << 16;
     }
 
-    // Globale Bandpegel aktualisieren (schneller Anstieg, langsamer Abfall)
+    // Update global band levels (fast attack, slow decay)
     for (int bi = 0; bi < 8; bi++) {
       const float sc = fminf(1.0f, bandPk[bi] * kBG[bi]);
       const float prev_b = g_bands[bi];
@@ -581,8 +581,8 @@ static void i2sInit(uint32_t sampleRate) {
 
     i2s_std_config_t std_cfg = {
       .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG((uint32_t)sampleRate),
-      // 16-bit Philips I2S (klassisch) für MAX98357A.
-      // Wichtig: Wenn slot_bit_width=32 gesetzt wird, erwartet der Treiber i.d.R. auch 32-bit Sample-Container.
+      // 16-bit Philips I2S (standard) for MAX98357A.
+      // Important: when slot_bit_width=32 is set, the driver expects 32-bit sample containers.
       .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
       .gpio_cfg = {
         .mclk = I2S_GPIO_UNUSED,
@@ -644,7 +644,7 @@ static void i2sWriteSilence(uint32_t ms) {
     const uint32_t remaining = totalFrames - written;
     const size_t framesThis = (remaining < framesPerChunk) ? (size_t)remaining : framesPerChunk;
     size_t bytesWritten = 0;
-    // Nicht endlos blockieren (falls I2S nicht sauber läuft): lieber abbrechen.
+    // Do not block indefinitely in case I2S is not running cleanly.
     i2s_channel_write(g_i2s_tx, chunk, framesThis * 2 * sizeof(int32_t), &bytesWritten, pdMS_TO_TICKS(20));
     if (bytesWritten == 0) break;
     written += (uint32_t)framesThis;
@@ -923,12 +923,12 @@ extern "C" void a2dp_audio_buf_cb(esp_a2d_conn_hdl_t /*conn_hdl*/, esp_a2d_audio
 static void btInit() {
   Serial.printf("Chip: %s, rev %d, cores %d\n", ESP.getChipModel(), (int)ESP.getChipRevision(), (int)ESP.getChipCores());
 #if defined(SOC_BT_CLASSIC_SUPPORTED) && !SOC_BT_CLASSIC_SUPPORTED
-  Serial.println("FEHLER: Dieses SoC unterstützt kein Bluetooth Classic (A2DP braucht Classic).");
-  Serial.println("Du brauchst einen 'ESP32' (WROOM/WROVER), nicht S2/S3/C3/C6/H2 usw.");
+  Serial.println("ERROR: This SoC does not support Bluetooth Classic (A2DP requires Classic BT).");
+  Serial.println("Use an ESP32 (WROOM/WROVER), not S2/S3/C3/C6/H2 etc.");
   while (true) delay(1000);
 #endif
 
-  // NVS für BT
+  // NVS for BT
   Serial.println("BT: nvs_flash_init...");
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -939,8 +939,8 @@ static void btInit() {
     Serial.printf("NVS init failed: %d\n", (int)err);
   }
 
-  // Arduino core liefert btStartMode(), das cfg.mode korrekt setzt.
-  // Das ist wichtig: esp_bt_controller_enable(MODE) muss zum MODE passen, der in esp_bt_controller_init(cfg.mode) gewählt wurde.
+  // Arduino core provides btStartMode(), which sets cfg.mode correctly.
+  // Important: esp_bt_controller_enable(MODE) must match the MODE passed to esp_bt_controller_init().
   Serial.printf("BT controller status (pre): %d\n", (int)esp_bt_controller_get_status());
   Serial.println("BT: btStartMode(CLASSIC)...");
   if (!btStartMode(BT_MODE_CLASSIC_BT)) {
@@ -1002,7 +1002,7 @@ static void fxReconnectMelody() {
   ringbufFlush();
   ringbufEnqueueSilence(30);
 
-  // kleine "lustige" Tonfolge
+  // short confirmation tone sequence
   ampMuteRaw(false);
   playTone(988.0f, 90, 0.10f);
   playTone(1319.0f, 90, 0.10f);
@@ -1018,7 +1018,7 @@ static void fxReconnectMelody() {
 static void requestReconnectNow() {
   Serial.println("Long press: reconnect + sound");
 
-  // Erst mal stumm, dann ggf. disconnect.
+  // Mute first, then disconnect if connected.
   ampApplyPolicy();
   ringbufEnqueueSilence(30);
 
@@ -1027,14 +1027,14 @@ static void requestReconnectNow() {
     delay(150);
   }
 
-  // Wieder discoverable/connectable
+  // Make discoverable and connectable again
   esp_err_t err = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
   Serial.printf("GAP scan mode set: %s (%d)\n", err == ESP_OK ? "OK" : "FAIL", (int)err);
 
-  // Sound-Feedback (lokal)
+  // Local sound feedback
   fxReconnectMelody();
 
-  // Danach wieder normale Policy: unmute erst wenn Streaming startet.
+  // Restore normal policy: unmute only when streaming resumes.
   ampApplyPolicy();
 }
 
@@ -1042,14 +1042,14 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.printf("ESP32 Boombox - Bluetooth Audio (A2DP Sink, ohne externe Library) | build %s\n", BOOMBOX_BUILD_ID);
+  Serial.printf("ESP32 Boombox - Bluetooth Audio (A2DP Sink, no external library) | build %s\n", BOOMBOX_BUILD_ID);
 
   pinMode(Pins::AMP_SD, OUTPUT);
   ampMuteRaw(true);
 
   pinMode(Pins::ACTION_BUTTON, INPUT_PULLUP);
 
-  // ADC (legacy ADC1 APIs, um Konflikt "driver_ng vs legacy" zu vermeiden)
+  // ADC (legacy ADC1 APIs to avoid "driver_ng vs legacy" conflict)
   adc1_config_width(ADC_WIDTH_BIT_12);
   // GPIO33/34/35 => ADC1 channels 5/6/7 on ESP32
   adc1_config_channel_atten(ADC1_CHANNEL_5, ADC_ATTEN_DB_11); // GPIO33
@@ -1081,23 +1081,23 @@ void setup() {
   const size_t msgCount = sizeof(msgs) / sizeof(msgs[0]);
   scrollSetMessage(msgs[random((long)msgCount)]);
 
-  // BT/A2DP zuerst: dann ist das Gerät schon discoverable, selbst wenn I2S Probleme macht.
+  // BT/A2DP first: device is discoverable even if I2S has issues.
   Serial.println("STEP: BT");
   btInit();
   Serial.println("STEP: A2DP");
   a2dpInit();
 
-  // I2S danach
+  // I2S setup
   Serial.println("STEP: I2S");
   i2sInit(g_sample_rate);
   i2sWriteSilence(80);
 
   // PCM ring buffer + writer task
-  // Wichtig: NICHT BYTEBUF verwenden. BYTEBUF kann mehrere Sends "zusammenkleben",
-  // wodurch xRingbufferReceive() sehr große Blöcke zurückgibt und unser fixer
-  // Processing-Buffer im Writer-Task überlaufen kann -> Crash beim AUDIO STARTED.
+  // Important: do NOT use BYTEBUF. BYTEBUF merges multiple sends,
+  // causing xRingbufferReceive() to return very large blocks that overflow
+  // the fixed processing buffer in the writer task -> crash on AUDIO STARTED.
   //
-  // NOSPLIT sorgt dafür, dass jeder Send als eigenes Item wieder empfangen wird.
+  // NOSPLIT ensures each send is received as its own item.
   // Buffer size: ~64KB gives headroom for scheduling jitter without adding too much latency.
   g_pcm_rb = xRingbufferCreate(64 * 1024, RINGBUF_TYPE_NOSPLIT);
   if (g_pcm_rb == nullptr) {
@@ -1111,26 +1111,26 @@ void setup() {
     Serial.println("I2S task: started");
   }
 
-  // Einschaltton: G3 – C4, tief und leise.
+  // Startup tone: G3 - C4, low and quiet.
   digitalWrite(Pins::AMP_SD, HIGH);
   playTone(196.0f, 220, 0.06f);  // G3
   delay(260);
-  playTone(261.6f, 320, 0.055f); // C4 – leiser ausklingen
+  playTone(261.6f, 320, 0.055f); // C4 - quieter fade out
   delay(360);
 
   ampApplyPolicy();
 
   Serial.println("BT ready: Pair 'ga-ra-ku-ta'");
   Serial.println("Button GPIO16:");
-  Serial.println("- kurz: Anzeige wechseln");
-  Serial.println("- lang (>=1.5s): reconnect + sound");
-  Serial.println("Potis:");
+  Serial.println("- short: cycle display mode");
+  Serial.println("- long (>=1.5s): reconnect + sound");
+  Serial.println("Knobs:");
   Serial.println("- Bass  : GPIO33 (Wiper), ends = GND + 3.3V");
   Serial.println("- Treble: GPIO34 (Wiper), ends = GND + 3.3V");
   Serial.printf("- Volume: GPIO35 (Wiper), ends = GND + 3.3V (Hard-Limit: %.0f%%)\n", (double)kMaxVolumePercent);
   Serial.println("LEDs:");
-  Serial.println("- WS2812 DIN: GPIO23 via 470Ω in Serie");
-  Serial.println("- V+ an Booster 5.1V, V- an GND (gemeinsame Masse mit ESP32)");
+  Serial.println("- WS2812 DIN: GPIO23 via 470 ohm in series");
+  Serial.println("- V+ to booster 5.1V, V- to GND (shared ground with ESP32)");
 }
 
 static float readPoti01(uint8_t pin, float prev, float alpha) {
@@ -1178,23 +1178,23 @@ static void ledsRenderNew() {
   const float lvl = g_audio_peak01;
 
   if (g_display_mode == DisplayMode::Off) {
-    // Alles aus – FastLED.clear() wurde oben schon aufgerufen.
+    // LEDs off - FastLED.clear() was already called above.
     FastLED.show();
     return;
   }
 
   if (g_display_mode == DisplayMode::Potis) {
-    // 3 horizontale Balken (je 2px hoch), von links nach rechts füllend.
-    // Körper: Cyan/Blau-Töne. Spitze (letzte Spalte): knall-orange.
+    // 3 horizontal bars (2px tall each), filling left to right.
+    // Body: cyan/blue tones. Tip (last column): bright orange.
     const uint8_t bassW = (uint8_t)lroundf(g_bass01   * (float)kMatrixW);
     const uint8_t trebW = (uint8_t)lroundf(g_treble01 * (float)kMatrixW);
     const uint8_t volW  = (uint8_t)lroundf((g_vol01 / kMaxVolume01) * (float)kMatrixW);
 
     struct BarDef { uint8_t y0; uint8_t w; uint8_t hue; };
     const BarDef defs[3] = {
-      {0, bassW, 128},  // Bass:   Cyan      (Zeilen 0-1)
-      {3, trebW, 150},  // Treble: Himmelblau (Zeilen 3-4)
-      {6, volW,  165},  // Volume: Blau      (Zeilen 6-7)
+      {0, bassW, 128},  // Bass:   Cyan      (rows 0-1)
+      {3, trebW, 150},  // Treble: Sky blue  (rows 3-4)
+      {6, volW,  165},  // Volume: Blue      (rows 6-7)
     };
     for (uint8_t i = 0; i < 3; i++) {
       const uint8_t w   = defs[i].w;
@@ -1215,19 +1215,19 @@ static void ledsRenderNew() {
     static float barH[8] = {};
 
     if (!g_connected) {
-      // Kein Gerät verbunden: pulsierendes Bluetooth-Symbol (blau)
-      // Alle Balken zurücksetzen damit sie nicht beim Verbinden schon angezeigt werden
+      // No device connected: pulsing Bluetooth symbol (blue)
+      // Reset bars so they do not carry over when a device connects
       for (uint8_t b = 0; b < 8; b++) barH[b] = 0.0f;
 
       static float btPhase = 0.0f;
-      btPhase += 0.025f; // langsam pulsieren (~5 Sekunden pro Zyklus)
+      btPhase += 0.025f; // slow pulse (~5 seconds per cycle)
       if (btPhase > 6.2832f) btPhase -= 6.2832f;
       const uint8_t bright = (uint8_t)((0.35f + 0.65f * sinf(btPhase)) * 210.0f);
-      const CHSV btCol = CHSV(160, 255, bright); // Blau
+      const CHSV btCol = CHSV(160, 255, bright); // Blue
 
-      // Bluetooth-Symbol über die ganze 16×8 Matrix:
-      // Stamm: x=7,8 über alle y=0..7 (doppelbreit)
-      // Oberer rechter Arm: (9,0)→(10,1)→(11,2)→(10,3)→(9,3)
+      // Bluetooth symbol across the full 16x8 matrix:
+      // Stem: x=7,8 across all y=0..7 (double width)
+      // Upper right arm: (9,0)→(10,1)→(11,2)→(10,3)→(9,3)
       // Unterer rechter Arm: (9,4)→(10,4)→(11,5)→(10,6)→(9,7)
       // Linke "Pfeile" bei y=2 (Peak oben) und y=5 (Peak unten): x=5,6
       //
@@ -1241,19 +1241,19 @@ static void ledsRenderNew() {
       //  6: .  .  .  .  .  .  .  #  #  .  #  .  .  .  .  .
       //  7: .  .  .  .  .  .  .  #  #  #  .  .  .  .  .  .
 
-      // Stamm (doppelbreit, volle Höhe)
+      // Stem (double width, full height)
       for (uint8_t y = 0; y < 8; y++) { setXY(7, y, btCol); setXY(8, y, btCol); }
-      // Oberer rechter Arm
+      // Upper right arm
       setXY(9, 0, btCol);
       setXY(10, 1, btCol);
       setXY(11, 2, btCol);
       setXY(10, 3, btCol); setXY(9, 3, btCol);
-      // Unterer rechter Arm (gespiegelt)
+      // Lower right arm (mirrored)
       setXY(9, 4, btCol); setXY(10, 4, btCol);
       setXY(11, 5, btCol);
       setXY(10, 6, btCol);
       setXY(9, 7, btCol);
-      // Linke Pfeile
+      // Left arrows
       setXY(6, 2, btCol); setXY(5, 2, btCol);
       setXY(6, 5, btCol); setXY(5, 5, btCol);
       FastLED.show();
@@ -1261,19 +1261,19 @@ static void ledsRenderNew() {
     }
 
     if (!g_streaming) {
-      // Verbunden, aber kein Audio: Bildschirm leer, Balken einfrieren verhindern
+      // Connected but no audio: clear screen, prevent bars from freezing
       for (uint8_t b = 0; b < 8; b++) barH[b] = 0.0f;
       FastLED.show();
       return;
     }
 
-    // Verbunden und spielt: 8 Balken à 2 Spalten
-    // Farbverlauf: links (Bass) = Magenta, rechts (Treble) = Cyan, durch Blau.
+    // Connected and playing: 8 bars at 2 columns each
+    // Color gradient: left (bass) = Magenta, right (treble) = Cyan, via Blue.
     for (uint8_t b = 0; b < 8; b++) {
       const float bandLvl = g_bands[b];
       const float target  = sqrtf(bandLvl) * (float)kMatrixH;
-      if (target > barH[b]) barH[b] = barH[b] * 0.20f + target * 0.80f; // schnell hoch
-      else                  barH[b] = barH[b] * 0.88f  + target * 0.12f; // langsam runter
+      if (target > barH[b]) barH[b] = barH[b] * 0.20f + target * 0.80f; // fast rise
+      else                  barH[b] = barH[b] * 0.88f  + target * 0.12f; // slow decay
       if (barH[b] < 0.0f)            barH[b] = 0.0f;
       if (barH[b] > (float)kMatrixH) barH[b] = (float)kMatrixH;
 
@@ -1290,10 +1290,10 @@ static void ledsRenderNew() {
     return;
   }
 
-  // VisualizerC: Plasma – Speed folgt der Musik, Helligkeit fix und etwas dunkler.
+  // VisualizerC: Plasma - speed follows the music, brightness fixed and slightly dimmed.
   {
     static float pp = 0.0f;
-    pp += 0.018f + lvl * 0.14f; // langsamer Flow bei Stille, schneller bei Musik
+    pp += 0.018f + lvl * 0.14f; // slow flow during silence, faster with music
     if (pp > 1000.0f) pp -= 1000.0f;
     const uint8_t hueBase = (uint8_t)(now / 50);
     for (uint8_t x = 0; x < kMatrixW; x++) {
@@ -1305,7 +1305,7 @@ static void ledsRenderNew() {
         const float dy = (float)y - 3.5f;
         const float v4 = sinf(sqrtf(dx * dx + dy * dy) * 0.75f + pp * 1.15f);
         const float v  = (v1 + v2 + v3 + v4 + 4.0f) / 8.0f; // 0..1
-        // Helligkeit quadratisch: niedrige v-Werte werden sehr dunkel → dunkle Stellen
+        // Quadratic brightness: low v values become very dark -> dark regions
         const uint8_t bright = (uint8_t)(v * v * 240.0f);
         setXY(x, y, CHSV(hueBase + (uint8_t)(v * 255.0f), 255, bright));
       }
@@ -1315,8 +1315,8 @@ static void ledsRenderNew() {
 }
 
 static void ledsRender() {
-  // Bring-up Anzeige: "Rahmen" pro 8x8 Panel + 3 Balken (Bass/Treble/Volume)
-  // Layout-Annahme: 128 LEDs linear; Panels sind egal fürs erste (nur Adressierbarkeit prüfen).
+  // Bring-up display: frame per 8x8 panel + 3 bars (Bass/Treble/Volume)
+  // Layout assumption: 128 LEDs linear; panel layout does not matter here (addressability check only).
   FastLED.clear(false);
 
   // Panel 1 frame (0..63): top row 0..7, bottom 56..63, left col 0,8,16...,56, right col 7,15,...,63
@@ -1374,10 +1374,10 @@ void loop() {
     // Hard limit (fixed): 0..kMaxVolume01
     g_vol01 = vol * kMaxVolume01;
 
-    // Poti-Bewegung → automatisch Potis-Modus anzeigen.
-    // Rolling-Window-Vergleich (15 Frames = ~300ms):
-    //   Rauschen schwankt zufällig → hebt sich über 300ms auf.
-    //   Echte Drehbewegung ist monoton → akkumuliert sich sicher.
+    // Knob movement -> automatically switch to knob display mode.
+    // Rolling window comparison (15 frames = ~300ms):
+    //   Noise fluctuates randomly -> cancels out over 300ms.
+    //   Real rotation is monotonic -> accumulates reliably.
     constexpr uint8_t kWin = 15;
     static float bassBuf[kWin] = {};
     static float trebBuf[kWin] = {};
@@ -1395,19 +1395,19 @@ void loop() {
 
     if (potiMoved) {
       if (g_display_mode != DisplayMode::Potis) {
-        // Automatisch von anderem Modus wechseln
+        // Automatically switch from another mode
         g_poti_return_mode = g_display_mode;
         g_display_mode     = DisplayMode::Potis;
         g_poti_auto_until  = now + 1500;
       } else if (g_poti_auto_until != 0) {
-        // Bereits auto-gewechselt: Timer verlängern
+        // Already auto-switched: extend timer
         g_poti_auto_until = now + 1500;
       }
-      // Manuell im Potis-Modus (auto_until==0): Timer NICHT setzen → kein Revert
+      // Manually in knob mode (auto_until == 0): do NOT set timer -> no revert
     }
   }
 
-  // Auto-Revert: nach 1.5s Stille zurück zum vorherigen Modus
+  // Auto-revert: return to previous mode after 1.5s of inactivity
   if (g_poti_auto_until != 0 && now >= g_poti_auto_until) {
     g_display_mode    = g_poti_return_mode;
     g_poti_auto_until = 0;
